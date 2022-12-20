@@ -65,6 +65,11 @@ final class ExpandSearchPhase extends SearchPhase {
             for (SearchHit hit : searchResponse.hits().getHits()) {
                 BoolQueryBuilder groupQuery = new BoolQueryBuilder();
                 Object collapseValue = hit.field(collapseBuilder.getField()).getValue();
+				
+                if (hit.getId().equals(collapseValue)) {
+                  continue;
+                }
+				
                 if (collapseValue != null) {
                     groupQuery.filter(QueryBuilders.matchQuery(collapseBuilder.getField(), collapseValue));
                 } else {
@@ -84,24 +89,33 @@ final class ExpandSearchPhase extends SearchPhase {
                     multiRequest.add(groupRequest);
                 }
             }
-            context.getSearchTransport().sendExecuteMultiSearch(multiRequest, context.getTask(), ActionListener.wrap(response -> {
-                Iterator<MultiSearchResponse.Item> it = response.iterator();
-                for (SearchHit hit : searchResponse.hits.getHits()) {
-                    for (InnerHitBuilder innerHitBuilder : innerHitBuilders) {
-                        MultiSearchResponse.Item item = it.next();
-                        if (item.isFailure()) {
-                            context.onPhaseFailure(this, "failed to expand hits", item.getFailure());
-                            return;
-                        }
-                        SearchHits innerHits = item.getResponse().getHits();
-                        if (hit.getInnerHits() == null) {
-                            hit.setInnerHits(new HashMap<>(innerHitBuilders.size()));
-                        }
-                        hit.getInnerHits().put(innerHitBuilder.getName(), innerHits);
-                    }
-                }
-                context.sendSearchResponse(searchResponse, queryResults);
-            }, context::onFailure));
+            
+            if (multiRequest.requests().isEmpty()) {
+              context.sendSearchResponse(searchResponse, queryResults);
+            } else {
+              context.getSearchTransport().sendExecuteMultiSearch(multiRequest, context.getTask(), ActionListener.wrap(response -> {
+                  Iterator<MultiSearchResponse.Item> it = response.iterator();
+                  for (SearchHit hit : searchResponse.hits.getHits()) {
+                      Object collapseValue = hit.field(collapseBuilder.getField()).getValue();
+                      if (hit.getId().equals(collapseValue)) {
+                        continue;
+                      }
+                      for (InnerHitBuilder innerHitBuilder : innerHitBuilders) {
+                          MultiSearchResponse.Item item = it.next();
+                          if (item.isFailure()) {
+                              context.onPhaseFailure(this, "failed to expand hits", item.getFailure());
+                              return;
+                          }
+                          SearchHits innerHits = item.getResponse().getHits();
+                          if (hit.getInnerHits() == null) {
+                              hit.setInnerHits(new HashMap<>(innerHitBuilders.size()));
+                          }
+                          hit.getInnerHits().put(innerHitBuilder.getName(), innerHits);
+                      }
+                  }
+                  context.sendSearchResponse(searchResponse, queryResults);
+              }, context::onFailure));
+            }
         } else {
             context.sendSearchResponse(searchResponse, queryResults);
         }
